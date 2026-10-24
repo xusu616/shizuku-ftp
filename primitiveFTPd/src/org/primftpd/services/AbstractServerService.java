@@ -253,7 +253,7 @@ public abstract class AbstractServerService
 	/**
 	 * Register a DNS-SD service (to be discoverable through Bonjour/Avahi).
 	 */
-	protected void announceService () {
+    protected synchronized void announceService () {
         nsdRegistrationListener = new NsdManager.RegistrationListener() {
             @Override
             public void onServiceRegistered(NsdServiceInfo serviceInfo) {
@@ -264,6 +264,11 @@ public abstract class AbstractServerService
             public void onRegistrationFailed(NsdServiceInfo serviceInfo,
                                              int errorCode) {
                 logger.debug("onRegistrationFailed()");
+                synchronized (AbstractServerService.this) {
+                    if (nsdRegistrationListener == this) {
+                        nsdRegistrationListener = null;
+                    }
+                }
             }
 
             @Override
@@ -297,9 +302,14 @@ public abstract class AbstractServerService
                 nsdRegistrationListener);
     }
 
-	protected void unannounceService () {
+	protected synchronized void unannounceService () {
+        if (nsdRegistrationListener == null) {
+            // Server startup or NSD registration failed before there was a registration to release.
+            return;
+        }
         NsdManager nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
         nsdManager.unregisterService(nsdRegistrationListener);
+        nsdRegistrationListener = null;
     }
 
 	protected void cleanQuickShareTmpDir() {

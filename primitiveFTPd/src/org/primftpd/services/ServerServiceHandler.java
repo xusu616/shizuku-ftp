@@ -16,7 +16,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.ref.WeakReference;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import eu.chainfire.libsuperuser.Shell;
 
@@ -32,7 +31,9 @@ public class ServerServiceHandler extends Handler
 	private final String logName;
 
 	private static Shell.Interactive shell;
-	private static final AtomicInteger shellUserCount = new AtomicInteger(0);
+	// Guarded by ServerServiceHandler.class, shared by FTP and SFTP handlers.
+	private static int shellUserCount;
+	private boolean shellAcquired;
 
 
 	protected ServerServiceHandler(
@@ -84,12 +85,13 @@ public class ServerServiceHandler extends Handler
 			service.startForeground(NotificationUtil.NOTIFICATION_ID, notification);
 
 			StorageType storageType = service.prefsBean.getStorageType();
+			Shell.Interactive serverShell = null;
 			if (storageType == StorageType.ROOT || storageType == StorageType.VIRTUAL) {
-				shellOpen();
+				serverShell = shellOpen();
 			}
 
 			// 2. Then do the heavy lifting
-			boolean started = service.launchServer(shell);
+			boolean started = service.launchServer(serverShell);
 
 			if (started && service.getServer() != null) {
 				PowerManager powerMgr =
@@ -148,34 +150,47 @@ public class ServerServiceHandler extends Handler
 		WakelockUtil.releaseWakeLock();
 	}
 
-	private synchronized void shellOpen() {
-		int count = shellUserCount.incrementAndGet();
-		if (shell == null) {
-			logger.debug("opening root shell ({})", logName);
-			Shell.Builder builder = new Shell.Builder();
-			if (!Utils.RUN_TESTS) {
-				builder.useSU();
+	private Shell.Interactive shellOpen() {
+		synchronized (ServerServiceHandler.class) {
+			if (shellAcquired) {
+				return shell; // Repeated start requests share this handler's existing lease.
 			}
-			shell = builder.open();
-		} else {
-			logger.debug("root shell already open ({}), user count: {}", logName, count);
+			if (shell == null) {
+				logger.debug("opening root shell ({})", logName);
+				Shell.Builder builder = new Shell.Builder();
+				if (!Utils.RUN_TESTS) {
+					builder.useSU();
+				}
+				shell = builder.open();
+			} else {
+				logger.debug("root shell already open ({}), user count: {}", logName, shellUserCount);
+			}
+			shellUserCount++;
+			shellAcquired = true;
+			return shell;
 		}
 	}
 
-	private synchronized void shellClose() {
-		int count = shellUserCount.decrementAndGet();
-		if (count > 0) {
-			logger.debug("root shell still in use by other servers ({}), user count: {}", logName, count);
-			return;
-		}
-		if (shell != null) {
-			logger.debug("closing root shell ({})", logName);
-			try {
-				shell.close();
-			} catch (Exception e) {
-				logger.warn("error on closing shell", e);
+	private void shellClose() {
+		synchronized (ServerServiceHandler.class) {
+			if (!shellAcquired) {
+				return; // Plain/SAF/Shizuku and failed starts may never acquire a shell.
 			}
-			shell = null;
+			shellAcquired = false;
+			shellUserCount--;
+			if (shellUserCount > 0) {
+				logger.debug("root shell still in use by other servers ({}), user count: {}", logName, shellUserCount);
+				return;
+			}
+			if (shell != null) {
+				logger.debug("closing root shell ({})", logName);
+				try {
+					shell.close();
+				} catch (Exception e) {
+					logger.warn("error on closing shell", e);
+				}
+				shell = null;
+			}
 		}
 	}
 }
