@@ -99,7 +99,8 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
 
     private PrefsBean prefsBean;
     private final IpAddressProvider ipAddressProvider = new IpAddressProvider();
-    private final KeyFingerprintProvider keyFingerprintProvider = new KeyFingerprintProvider();
+    private KeyFingerprintProvider keyFingerprintProvider = new KeyFingerprintProvider();
+    private ExecutorService viewExecutor;
     private ServersRunningBean serversRunning;
     private long timestampOfLastEvent = 0;
 
@@ -166,14 +167,24 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
 
         View view = inflater.inflate(getLayoutId(), container, false);
 
-        PftpdFragment fragment = this;
-        try (ExecutorService executorService = Executors.newSingleThreadExecutor()) {
-            executorService.execute(() -> {
-                logger.trace("CalcPubkeyFinterprintsTask()");
-                keyFingerprintProvider.calcPubkeyFingerprints(fragment.getContext());
-                view.post(fragment::showKeyFingerprints);
+        viewExecutor = Executors.newSingleThreadExecutor();
+        Context appContext = requireContext().getApplicationContext();
+        SharedPreferences prefs = LoadPrefsUtil.getPrefs(appContext);
+        boolean startOnOpen = LoadPrefsUtil.startOnOpen(prefs);
+        viewExecutor.execute(() -> {
+            KeyFingerprintProvider fingerprints = new KeyFingerprintProvider();
+            fingerprints.calcPubkeyFingerprints(appContext);
+            mainHandler.post(() -> {
+                if (getView() != view) {
+                    return; // A result from a destroyed view must not update its replacement.
+                }
+                keyFingerprintProvider = fingerprints;
+                showKeyFingerprints();
+                if (startOnOpen) {
+                    ServicesStartStopUtil.startServers(this);
+                }
             });
-        }
+        });
 
         ((TextView) view.findViewById(R.id.addressesLabel)).setText(
                 String.format("%s (%s)", getText(R.string.ipAddrLabel), getText(R.string.ifacesLabel))
@@ -185,13 +196,6 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
         );
 
         EventBus.getDefault().register(this);
-
-        SharedPreferences prefs = LoadPrefsUtil.getPrefs(getContext());
-        Boolean startOnOpen = LoadPrefsUtil.startOnOpen(prefs);
-        if (startOnOpen) {
-            keyFingerprintProvider.calcPubkeyFingerprints(getContext());
-            ServicesStartStopUtil.startServers(this);
-        }
 
         addressesLoading = view.findViewById(R.id.addressesLoading);
         clientActionView1 = view.findViewById(R.id.clientActionsLine1);
@@ -208,6 +212,7 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
 
     @Override
     public void onDestroyView() {
+        viewExecutor.shutdownNow();
         super.onDestroyView();
         EventBus.getDefault().unregister(this);
         mainHandler.removeCallbacksAndMessages(null);
@@ -286,17 +291,18 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
         if (view == null) {
             return;
         }
-        try (ExecutorService executorService = Executors.newSingleThreadExecutor()) {
-            executorService.execute(() -> {
-                if (!ipAddressProvider.isIpAvail(prefsBean.getBindIp())) {
-                    String msg = "IP " + prefsBean.getBindIp() +
-                            " is currently not assigned to an interface. May lead to a crash.";
-                    view.post(() ->
-                            Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show()
-                    );
-                }
-            });
-        }
+        String bindIp = prefsBean.getBindIp();
+        viewExecutor.execute(() -> {
+            if (!ipAddressProvider.isIpAvail(bindIp)) {
+                String msg = "IP " + bindIp +
+                        " is currently not assigned to an interface. May lead to a crash.";
+                mainHandler.post(() -> {
+                    if (getView() == view) {
+                        Toast.makeText(view.getContext(), msg, Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        });
     }
 
     @Override
@@ -673,67 +679,67 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
         container.removeAllViews();
         addressesLoading.setVisibility(View.VISIBLE);
 
-        try (ExecutorService executorService = Executors.newSingleThreadExecutor()) {
-            executorService.execute(() -> doShowAddresses(view, container));
-        }
+        doShowAddresses(view, container);
     }
 
     protected void doShowAddresses(View view, LinearLayout container) {
-        SharedPreferences prefs = LoadPrefsUtil.getPrefs(getContext());
+        SharedPreferences prefs = LoadPrefsUtil.getPrefs(view.getContext());
         boolean chooseBindIp = prefs.getBoolean(
                 LoadPrefsUtil.PREF_KEY_CHOOSE_BIND_IP,
                 Boolean.FALSE);
 
-        final RadioGroup[] radioGroupHolder = new RadioGroup[1];
-        RadioGroup radioGroup = null;
-        final Map<Integer, String> radioButtonIdToIpaddr = new HashMap<>();
-        if (chooseBindIp) {
-            radioGroup = new RadioGroup(this.getContext());
-        } else {
-            this.chosenIp = null;
-        }
-        radioGroupHolder[0] = radioGroup;
-
         boolean isLeftToRight = isLeftToRight();
-        List<IpAddressBean> ipAddressBeans = ipAddressProvider.ipAddressTexts(
-                getContext(), true, isLeftToRight);
+        Context appContext = view.getContext().getApplicationContext();
+        viewExecutor.execute(() -> {
+            List<IpAddressBean> ipAddressBeans = ipAddressProvider.ipAddressTexts(
+                    appContext, true, isLeftToRight);
+            mainHandler.post(() -> {
+                if (getView() != view) {
+                    return;
+                }
+                // Both view creation and view updates belong to the main thread.
+                RadioGroup radioGroup = chooseBindIp ? new RadioGroup(view.getContext()) : null;
+                Map<Integer, String> radioButtonIdToIpaddr = new HashMap<>();
+                if (!chooseBindIp) {
+                    chosenIp = null;
+                }
+                container.removeAllViews();
+                addressesLoading.setVisibility(View.GONE);
 
-        view.post(() -> {
-            addressesLoading.setVisibility(View.GONE);
-
-            int idx = 42;
-            for (IpAddressBean ipAddressBean : ipAddressBeans) {
-                if (chooseBindIp) {
-                    RadioButton radio = new RadioButton(this.getContext());
-                    radioGroupHolder[0].addView(radio);
-                    radio.setText(ipAddressBean.getDisplayName());
-                    radio.setId(idx);
-                    radioButtonIdToIpaddr.put(idx, ipAddressBean.getIpAddress());
-                    if (this.chosenIp != null) {
-                        if (ipAddressBean.getIpAddress().equals(this.chosenIp)) {
+                int idx = 42;
+                for (IpAddressBean ipAddressBean : ipAddressBeans) {
+                    if (chooseBindIp) {
+                        RadioButton radio = new RadioButton(view.getContext());
+                        radioGroup.addView(radio);
+                        radio.setText(ipAddressBean.getDisplayName());
+                        radio.setId(idx);
+                        radioButtonIdToIpaddr.put(idx, ipAddressBean.getIpAddress());
+                        if (this.chosenIp != null) {
+                            if (ipAddressBean.getIpAddress().equals(this.chosenIp)) {
+                                radio.setChecked(true);
+                            }
+                        } else if (ipAddressBean.getIpAddress().equals(prefsBean.getBindIp())) {
                             radio.setChecked(true);
                         }
-                    } else if (ipAddressBean.getIpAddress().equals(prefsBean.getBindIp())) {
-                        radio.setChecked(true);
+                        idx = idx + 1;
+                    } else {
+                        TextView textView = new TextView(container.getContext());
+                        container.addView(textView);
+                        textView.setText(ipAddressBean.getDisplayName());
+                        textView.setGravity(Gravity.CENTER_HORIZONTAL);
+                        textView.setTextIsSelectable(true);
                     }
-                    idx = idx + 1;
-                } else {
-                    TextView textView = new TextView(container.getContext());
-                    container.addView(textView);
-                    textView.setText(ipAddressBean.getDisplayName());
-                    textView.setGravity(Gravity.CENTER_HORIZONTAL);
-                    textView.setTextIsSelectable(true);
                 }
-            }
 
-            if (chooseBindIp) {
-                container.addView(radioGroupHolder[0]);
+                if (chooseBindIp) {
+                    container.addView(radioGroup);
 
-                PftpdFragment fragment = this;
-                radioGroupHolder[0].setOnCheckedChangeListener((group, checkedId) ->
-                        fragment.chosenIp = radioButtonIdToIpaddr.get(checkedId)
-                );
-            }
+                    PftpdFragment fragment = this;
+                    radioGroup.setOnCheckedChangeListener((group, checkedId) ->
+                            fragment.chosenIp = radioButtonIdToIpaddr.get(checkedId)
+                    );
+                }
+            });
         });
     }
 

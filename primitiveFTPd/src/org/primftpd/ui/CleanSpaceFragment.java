@@ -3,6 +3,8 @@ package org.primftpd.ui;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -31,6 +33,9 @@ public class CleanSpaceFragment extends Fragment implements RecreateLogger {
     private TextView logsSpaceTextView;
     private TextView rootTmpSpaceTextView;
     private TextView trafficChartDataSizeTextView;
+    private ExecutorService deleteExecutor;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private AlertDialog progressDialog;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container,
@@ -39,6 +44,7 @@ public class CleanSpaceFragment extends Fragment implements RecreateLogger {
         super.onCreateView(inflater, container, savedInstanceState);
 
         View view = inflater.inflate(R.layout.clean_space, container, false);
+        deleteExecutor = Executors.newSingleThreadExecutor();
         quickShareSpaceTextView = view.findViewById(R.id.quickShareFilesSize);
         logsSpaceTextView = view.findViewById(R.id.logFilesSize);
         rootTmpSpaceTextView = view.findViewById(R.id.rootTmpFilesSize);
@@ -59,12 +65,27 @@ public class CleanSpaceFragment extends Fragment implements RecreateLogger {
     }
 
     @Override
+    public void onDestroyView() {
+        // Finish an already submitted deletion, without keeping its UI alive.
+        deleteExecutor.shutdown();
+        mainHandler.removeCallbacksAndMessages(null);
+        if (progressDialog != null) {
+            progressDialog.dismiss();
+            progressDialog = null;
+        }
+        super.onDestroyView();
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         updateView();
     }
 
     private void onButtonClick(CleanSpaceFragment fragment, File dir, boolean includeChildren) {
+        if (progressDialog != null) {
+            return; // Do not submit the same deletion again while one is running.
+        }
         View view = fragment.getView();
         if (view == null) {
             logger.warn("view is null");
@@ -72,18 +93,22 @@ public class CleanSpaceFragment extends Fragment implements RecreateLogger {
         }
         int numberOfFiles = collectNumberOfFiles(dir, includeChildren);
         if (numberOfFiles > 0) {
-            final AlertDialog progressDialog = createProgressDialog();
-            try (ExecutorService executorService = Executors.newSingleThreadExecutor()) {
-                executorService.execute(() -> {
-                    int counter = 0;
-                    delete(dir, includeChildren, counter);
+            progressDialog = createProgressDialog();
+            progressDialog.setCancelable(false);
+            progressDialog.show();
+            deleteExecutor.execute(() -> {
+                int counter = 0;
+                delete(dir, includeChildren, counter);
 
-                    view.post(() -> {
-                        progressDialog.dismiss();
-                        fragment.updateView();
-                    });
+                mainHandler.post(() -> {
+                    if (fragment.getView() != view) {
+                        return;
+                    }
+                    progressDialog.dismiss();
+                    progressDialog = null;
+                    fragment.updateView();
                 });
-            }
+            });
         }
     }
 

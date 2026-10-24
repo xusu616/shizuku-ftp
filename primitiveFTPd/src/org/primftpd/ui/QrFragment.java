@@ -1,9 +1,12 @@
 package org.primftpd.ui;
 
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -50,6 +53,8 @@ public class QrFragment extends Fragment implements RecreateLogger {
     private int height;
     private TextView fallbackTextView;
     private ProgressBar qrLoading;
+    private ExecutorService viewExecutor;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final String chosenIp;
 
@@ -64,6 +69,7 @@ public class QrFragment extends Fragment implements RecreateLogger {
         super.onCreateView(inflater, container, savedInstanceState);
 
         View view = inflater.inflate(R.layout.qr, container, false);
+        viewExecutor = Executors.newSingleThreadExecutor();
 
         urlsParent = view.findViewById(R.id.qrUrlsParent);
         qrImage = view.findViewById(R.id.qrImage);
@@ -77,6 +83,13 @@ public class QrFragment extends Fragment implements RecreateLogger {
     }
 
     @Override
+    public void onDestroyView() {
+        viewExecutor.shutdownNow();
+        mainHandler.removeCallbacksAndMessages(null);
+        super.onDestroyView();
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         draw(chosenIp);
@@ -84,9 +97,7 @@ public class QrFragment extends Fragment implements RecreateLogger {
 
     protected void draw(String chosenIp) {
         qrLoading.setVisibility(View.VISIBLE);
-        try (ExecutorService executorService = Executors.newSingleThreadExecutor()) {
-            executorService.execute(() -> doDraw(chosenIp));
-        }
+        doDraw(chosenIp);
     }
 
     protected void doDraw(String chosenIp) {
@@ -98,72 +109,79 @@ public class QrFragment extends Fragment implements RecreateLogger {
         Configuration config = this.getResources().getConfiguration();
         boolean isLeftToRight = config.getLayoutDirection() == View.LAYOUT_DIRECTION_LTR;
 
-        IpAddressProvider ipAddressProvider = new IpAddressProvider();
-        List<IpAddressBean> ipAddressBeans = ipAddressProvider.ipAddressTexts(
-                getContext(),
-                false,
-                isLeftToRight);
-
-        SharedPreferences prefs = LoadPrefsUtil.getPrefs(getContext());
+        Context appContext = requireContext().getApplicationContext();
+        SharedPreferences prefs = LoadPrefsUtil.getPrefs(appContext);
         PrefsBean prefsBean = LoadPrefsUtil.loadPrefs(logger, prefs);
 
         Boolean showIpv4 = LoadPrefsUtil.showIpv4InNotification(prefs);
         Boolean showIpv6 = LoadPrefsUtil.showIpv6InNotification(prefs);
 
-        List<String> urls = new ArrayList<>();
-
-        if (chosenIp != null) {
-            boolean ipv6 = ipAddressProvider.isIpv6(chosenIp);
-            addUrl(urls, chosenIp, ipv6, prefsBean);
-        } else {
-            for (IpAddressBean ipAddressBean : ipAddressBeans) {
-                String ipAddressText = ipAddressBean.getIpAddress();
-                boolean ipv6 = ipAddressProvider.isIpv6(ipAddressText);
-                if (!ipv6 && !showIpv4) {
-                    logger.debug("ignoring ip: {}", ipAddressText);
-                    continue;
-                }
-                if (ipv6 && !showIpv6) {
-                    logger.debug("ignoring ip: {}", ipAddressText);
-                    continue;
-                }
-                addUrl(urls, ipAddressText, ipv6, prefsBean);
-            }
-        }
-
         final boolean darkMode = UiModeUtil.isDarkMode(getResources());
-        RadioGroup radioGroup = new RadioGroup(getContext());
-        radioGroup.setOrientation(RadioGroup.VERTICAL);
-        for (final String url : urls) {
-            logger.debug("showing url: {}", url);
-            RadioButton radioButton = new RadioButton(getContext());
-            radioButton.setText(url);
-            radioGroup.addView(radioButton);
-            final QrFragment fragment = this;
-            radioButton.setOnClickListener(v -> {
-                try (ExecutorService executorService = Executors.newSingleThreadExecutor()) {
-                    executorService.execute(() -> {
-                        Bitmap qr = fragment.generateQr(url, darkMode);
-                        v.post(() -> fragment.qrImage.setImageBitmap(qr));
+        final int qrWidth = width;
+        final int qrHeight = height;
+        viewExecutor.execute(() -> {
+            IpAddressProvider ipAddressProvider = new IpAddressProvider();
+            List<IpAddressBean> ipAddressBeans = ipAddressProvider.ipAddressTexts(
+                    appContext, false, isLeftToRight);
+            List<String> urls = new ArrayList<>();
+
+            if (chosenIp != null) {
+                boolean ipv6 = ipAddressProvider.isIpv6(chosenIp);
+                addUrl(urls, chosenIp, ipv6, prefsBean);
+            } else {
+                for (IpAddressBean ipAddressBean : ipAddressBeans) {
+                    String ipAddressText = ipAddressBean.getIpAddress();
+                    boolean ipv6 = ipAddressProvider.isIpv6(ipAddressText);
+                    if (!ipv6 && !showIpv4) {
+                        logger.debug("ignoring ip: {}", ipAddressText);
+                        continue;
+                    }
+                    if (ipv6 && !showIpv6) {
+                        logger.debug("ignoring ip: {}", ipAddressText);
+                        continue;
+                    }
+                    addUrl(urls, ipAddressText, ipv6, prefsBean);
+                }
+            }
+
+            mainHandler.post(() -> {
+                if (getView() != view) {
+                    return;
+                }
+                RadioGroup radioGroup = new RadioGroup(view.getContext());
+                radioGroup.setOrientation(RadioGroup.VERTICAL);
+                for (final String url : urls) {
+                    logger.debug("showing url: {}", url);
+                    RadioButton radioButton = new RadioButton(view.getContext());
+                    radioButton.setText(url);
+                    radioGroup.addView(radioButton);
+                    final QrFragment fragment = this;
+                    radioButton.setOnClickListener(v -> {
+                        viewExecutor.execute(() -> {
+                            Bitmap qr = fragment.generateQr(url, darkMode, qrWidth, qrHeight);
+                            mainHandler.post(() -> {
+                                if (getView() == view) {
+                                    fragment.qrImage.setImageBitmap(qr);
+                                }
+                            });
+                        });
                     });
                 }
-            });
-        }
 
-        view.post(() -> {
-            qrLoading.setVisibility(View.GONE);
-            if (ipAddressBeans.isEmpty() && chosenIp == null) {
-                fallbackTextView.setVisibility(View.VISIBLE);
-            } else {
-                fallbackTextView.setVisibility(View.GONE);
-            }
-            urlsParent.removeAllViewsInLayout();
-            urlsParent.addView(radioGroup);
-            if (!urls.isEmpty()) {
-                View firstRadio = radioGroup.getChildAt(0);
-                firstRadio.callOnClick();
-                ((RadioButton) firstRadio).setChecked(true);
-            }
+                qrLoading.setVisibility(View.GONE);
+                if (ipAddressBeans.isEmpty() && chosenIp == null) {
+                    fallbackTextView.setVisibility(View.VISIBLE);
+                } else {
+                    fallbackTextView.setVisibility(View.GONE);
+                }
+                urlsParent.removeAllViewsInLayout();
+                urlsParent.addView(radioGroup);
+                if (!urls.isEmpty()) {
+                    View firstRadio = radioGroup.getChildAt(0);
+                    firstRadio.callOnClick();
+                    ((RadioButton) firstRadio).setChecked(true);
+                }
+            });
         });
     }
 
@@ -180,7 +198,7 @@ public class QrFragment extends Fragment implements RecreateLogger {
         }
     }
 
-    private Bitmap generateQr(String url, boolean darkMode) {
+    private Bitmap generateQr(String url, boolean darkMode, int width, int height) {
         Map<EncodeHintType, Object> hintsMap = new HashMap<>();
         hintsMap.put(EncodeHintType.CHARACTER_SET, "utf-8");
         hintsMap.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.Q);
