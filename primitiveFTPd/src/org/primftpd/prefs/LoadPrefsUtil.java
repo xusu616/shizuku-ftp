@@ -2,7 +2,7 @@ package org.primftpd.prefs;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.preference.PreferenceManager;
+import androidx.preference.PreferenceManager;
 
 import org.apache.ftpserver.impl.PassivePorts;
 import org.jetbrains.annotations.NotNull;

@@ -9,9 +9,6 @@ import android.widget.Toast;
 import org.primftpd.R;
 import org.slf4j.LoggerFactory;
 
-//WARNING: This class was deprecated in API level 29.
-//EditTextPreference This class was deprecated in API level 29.
-
 public class PortEditTextPreference extends EditTextPreference implements Preference.OnPreferenceChangeListener
 {
 	public PortEditTextPreference(Context context, AttributeSet attrs, int defStyleAttr) {
