@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -14,6 +13,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Process;
 import androidx.preference.PreferenceManager;
+import androidx.core.content.IntentCompat;
 import android.widget.Toast;
 
 import org.apache.ftpserver.impl.IODataConnectionFactory;
@@ -52,7 +52,7 @@ public abstract class AbstractServerService
 	String chosenIp;
 	private NsdManager.RegistrationListener nsdRegistrationListener;
 
-	private Handler timerHandler;
+	private final Handler timerHandler = new Handler(Looper.getMainLooper());
 	private long timerTimeout;
 	private final Runnable timerTask = () -> {
 		logger.info("stopping server due to idle timeout");
@@ -88,7 +88,9 @@ public abstract class AbstractServerService
 
 		String msg = getText(R.string.serverCouldNotBeStarted).toString();
 		msg += e.getLocalizedMessage();
-		Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show();
+		String errorMessage = msg;
+		timerHandler.post(() ->
+				Toast.makeText(getApplicationContext(), errorMessage, Toast.LENGTH_LONG).show());
 		//log.error(msg);
 	}
 
@@ -121,12 +123,13 @@ public abstract class AbstractServerService
 		}
 
 		// get parameters
-		Bundle extras = intent.getExtras();
-		prefsBean = (PrefsBean)extras.get(ServicesStartStopUtil.EXTRA_PREFS_BEAN);
-		keyFingerprintProvider = (KeyFingerprintProvider)extras.get(
-				ServicesStartStopUtil.EXTRA_FINGERPRINT_PROVIDER);
-		quickShareBean = (QuickShareBean)extras.get(ServicesStartStopUtil.EXTRA_QUICK_SHARE_BEAN);
-		chosenIp = extras.getString(ServicesStartStopUtil.EXTRA_CHOSEN_IP);
+		prefsBean = IntentCompat.getSerializableExtra(intent,
+				ServicesStartStopUtil.EXTRA_PREFS_BEAN, PrefsBean.class);
+		keyFingerprintProvider = IntentCompat.getSerializableExtra(intent,
+				ServicesStartStopUtil.EXTRA_FINGERPRINT_PROVIDER, KeyFingerprintProvider.class);
+		quickShareBean = IntentCompat.getSerializableExtra(intent,
+				ServicesStartStopUtil.EXTRA_QUICK_SHARE_BEAN, QuickShareBean.class);
+		chosenIp = intent.getStringExtra(ServicesStartStopUtil.EXTRA_CHOSEN_IP);
 
 		logger.info("Service '{}' onStartCommand. storageType: {}", 
 				getServiceName(), 
@@ -152,6 +155,8 @@ public abstract class AbstractServerService
 		EventBus.getDefault().post(new ServerStateChangedEvent());
 
 		// handle server stop on idle timeout
+		stopTimer();
+		timerTimeout = 0;
 		SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getContext());
 		try {
 			long timeout = Long.parseLong(sharedPreferences.getString(
@@ -161,7 +166,7 @@ public abstract class AbstractServerService
 				this.timerTimeout = timeout * 60 * 1000;
 				startTimer();
 			}
-		} catch (Exception e) {
+		} catch (NumberFormatException e) {
 			logger.error("could not start timer", e);
 		}
 
@@ -185,9 +190,7 @@ public abstract class AbstractServerService
 		}
 
 		// stop on idle timer not needed anymore
-		if (this.timerHandler != null) {
-			stopTimer();
-		}
+		stopTimer();
 
 		// post event
 		EventBus.getDefault().post(new ServerStateChangedEvent());
@@ -205,20 +208,17 @@ public abstract class AbstractServerService
 
 	@Subscribe(threadMode = ThreadMode.MAIN, sticky = true)
 	public void onEvent(ClientActionEvent event) {
-		if (timerHandler != null) {
-			stopTimer();
-			startTimer();
-		}
+		startTimer();
 	}
 
-	private synchronized void stopTimer() {
+	private void stopTimer() {
 		this.timerHandler.removeCallbacks(timerTask);
 	}
-	private synchronized void startTimer() {
-		if (this.timerHandler == null) {
-			this.timerHandler = new Handler();
+	private void startTimer() {
+		stopTimer();
+		if (timerTimeout > 0) {
+			timerHandler.postDelayed(timerTask, timerTimeout);
 		}
-		this.timerHandler.postDelayed(timerTask, this.timerTimeout);
 	}
 
 	@Override
