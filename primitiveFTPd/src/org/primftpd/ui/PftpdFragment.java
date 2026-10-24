@@ -2,7 +2,6 @@ package org.primftpd.ui;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -90,7 +89,6 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
         }
     };
 
-    private static final int REQUEST_CODE_SAF_PERM = 1234;
     private static final int REQUEST_CODE_SHIZUKU_PERM = 1235;
     private static final long SHIZUKU_RETRY_DELAY_MS = 500L;
     private static final int SHIZUKU_MAX_RETRY_COUNT = 8;
@@ -118,6 +116,9 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
     private String chosenIp;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private final ActivityResultLauncher<Uri> safDirectoryLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocumentTree(), this::onSafDirectorySelected);
 
     private final Shizuku.OnBinderReceivedListener binderReceivedListener = () -> {
         shizukuBinderReady = true;
@@ -304,12 +305,6 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
 
         logger.debug("onPause()");
         requireActivity().unregisterReceiver(this.networkStateReceiver);
-    }
-
-    Intent buildSafIntend() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        return intent;
     }
 
     private void logShizukuState(String source) {
@@ -510,7 +505,6 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
         view.findViewById(R.id.safUri).setVisibility(View.GONE);
 
         StorageType storageType = null;
-        Intent intent = buildSafIntend();
 
         int crb = group.getCheckedRadioButtonId();
         try {
@@ -534,21 +528,21 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
                 shizukuRetryCount = 0;
                 storageType = StorageType.SAF;
                 if (!onStartOngoing) {
-                    startActivityForResult(intent, REQUEST_CODE_SAF_PERM);
+                    safDirectoryLauncher.launch(null);
                 }
             } else if (crb == R.id.radioStorageRoSaf) {
                 pendingShizukuSelection = false;
                 shizukuRetryCount = 0;
                 storageType = StorageType.RO_SAF;
                 if (!onStartOngoing) {
-                    startActivityForResult(intent, REQUEST_CODE_SAF_PERM);
+                    safDirectoryLauncher.launch(null);
                 }
             } else if (crb == R.id.radioStorageVirtual) {
                 pendingShizukuSelection = false;
                 shizukuRetryCount = 0;
                 storageType = StorageType.VIRTUAL;
                 if (!onStartOngoing) {
-                    startActivityForResult(intent, REQUEST_CODE_SAF_PERM);
+                    safDirectoryLauncher.launch(null);
                 }
             }
         } catch (ActivityNotFoundException e) {
@@ -570,50 +564,41 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
         }
     }
 
-    @Override
-    public void onActivityResult(int requestCode, int resultCode, Intent intent) {
-        super.onActivityResult(requestCode, resultCode, intent);
-        logger.debug("onActivityResult()");
-        if (requestCode == REQUEST_CODE_SAF_PERM && resultCode == Activity.RESULT_OK) {
-            if (intent != null) {
-                Uri uri = intent.getData();
-                String uriStr = uri != null ? uri.toString() : null;
-                logger.debug("got uri: '{}'", uriStr);
-                if (uri == null) {
-                    logger.warn("did not get SAP URI");
-                    return;
-                }
+    private void onSafDirectorySelected(Uri uri) {
+        if (uri == null) {
+            return; // The user cancelled the directory picker.
+        }
+        String uriStr = uri.toString();
+        logger.debug("got SAF uri: '{}'", uriStr);
 
-                int modeFlags =
-                        (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        int modeFlags =
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 
-                FragmentActivity activity = requireActivity();
-                String oldUrl = prefsBean.getSafUrl();
-                if (!StringUtils.isBlank(oldUrl)) {
-                    try {
-                        activity.getContentResolver()
-                                .releasePersistableUriPermission(Uri.parse(oldUrl), modeFlags);
-                    } catch (SecurityException e) {
-                        logger.info("SecurityException while calling releasePersistableUriPermission()");
-                        logger.trace("", e);
-                    }
-                }
-
-                try {
-                    activity.grantUriPermission(activity.getPackageName(), uri, modeFlags);
-                    activity.getContentResolver().takePersistableUriPermission(uri, modeFlags);
-                } catch (SecurityException e) {
-                    logger.info("SecurityException while calling takePersistableUriPermission()");
-                    logger.trace("", e);
-                }
-
-                SharedPreferences prefs = LoadPrefsUtil.getPrefs(getContext());
-                LoadPrefsUtil.storeSafUrl(prefs, uriStr);
-                showSafUrl(uriStr);
-                loadPrefs();
+        FragmentActivity activity = requireActivity();
+        SharedPreferences prefs = LoadPrefsUtil.getPrefs(activity);
+        String oldUrl = LoadPrefsUtil.loadPrefs(logger, prefs).getSafUrl();
+        if (!StringUtils.isBlank(oldUrl)) {
+            try {
+                activity.getContentResolver()
+                        .releasePersistableUriPermission(Uri.parse(oldUrl), modeFlags);
+            } catch (SecurityException e) {
+                logger.info("SecurityException while calling releasePersistableUriPermission()");
+                logger.trace("", e);
             }
         }
+
+        try {
+            activity.grantUriPermission(activity.getPackageName(), uri, modeFlags);
+            activity.getContentResolver().takePersistableUriPermission(uri, modeFlags);
+        } catch (SecurityException e) {
+            logger.info("SecurityException while calling takePersistableUriPermission()");
+            logger.trace("", e);
+        }
+
+        LoadPrefsUtil.storeSafUrl(prefs, uriStr);
+        showSafUrl(uriStr);
+        loadPrefs();
     }
 
     protected void checkSafAccess() {
@@ -939,9 +924,8 @@ public class PftpdFragment extends Fragment implements RecreateLogger, RadioGrou
 
         safUriView.setOnClickListener(v -> {
             logger.trace("SAF URL refreshButton OnClickListener");
-            Intent intent = buildSafIntend();
             if (!onStartOngoing) {
-                startActivityForResult(intent, REQUEST_CODE_SAF_PERM);
+                safDirectoryLauncher.launch(null);
             }
         });
     }

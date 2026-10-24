@@ -1,6 +1,5 @@
 package org.primftpd.share;
 
-import android.app.Activity;
 import android.app.ProgressDialog;
 import android.content.Intent;
 import android.net.Uri;
@@ -10,16 +9,17 @@ import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
 import androidx.activity.EdgeToEdge;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.IntentCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import org.primftpd.R;
-import org.primftpd.filepicker.nononsenseapps.Utils;
 import org.primftpd.ui.DownloadOrSaveDialogFragment;
 import org.primftpd.util.FilenameUnique;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -37,6 +37,9 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
     private List<Uri> uris;
     private List<String> contents;
     private String type;
+
+    private final ActivityResultLauncher<Uri> targetDirectoryLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocumentTree(), this::onTargetDirectorySelected);
 
     @Override
     protected boolean keepWakelock() {
@@ -75,7 +78,7 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
         logger.debug("got action: '{}' and type: '{}'", action, type);
 
         if (Intent.ACTION_SEND.equals(action) && type != null) {
-            Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            Uri uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
             if (uri != null) {
                 uris = Collections.singletonList(uri);
             }
@@ -84,7 +87,7 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
                 contents = Collections.singletonList(content);
             }
         } else if (Intent.ACTION_SEND_MULTIPLE.equals(action) && type != null) {
-            uris = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            uris = IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri.class);
             contents = intent.getStringArrayListExtra(Intent.EXTRA_TEXT);
         }
 
@@ -125,6 +128,9 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
             }
         }
 
+        if (savedInstanceState != null) {
+            return; // FragmentManager and ActivityResultRegistry restore the pending UI/result.
+        }
         if (showDownloadDialog) {
             DownloadOrSaveDialogFragment dialog = new DownloadOrSaveDialogFragment();
             dialog.show(getSupportFragmentManager(), DIALOG_TAG);
@@ -139,46 +145,22 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
     public void prepareSaveToIntent() {
         if (uris != null || contents != null) {
             logger.debug("trying to create SAF intent");
-            Intent safIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-            safIntent.addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            startActivityForResult(safIntent, 1);
+            targetDirectoryLauncher.launch(null);
         }
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        logger.debug("onActivityResult()");
-
-        if (resultCode == Activity.RESULT_OK) {
-            TargetDir targetDir = null;
-            if (requestCode == 0) {
-                Uri targetUri = data.getData();
-                File targetPath = Utils.getFileForUri(targetUri);
-                logger.debug("targetDir: {}", targetPath);
-                targetDir = new TargetDir(targetPath);
-
-            } else if (requestCode == 1) {
-                Uri uri = data.getData();
-                String uriStr = uri.toString();
-                logger.debug("got SAF uri: '{}'", uriStr);
-                targetDir = new TargetDir(this, uriStr);
-
-            }
-
-            if (uris != null) {
-                ProgressDialog progressDialog = createProgressDialog(uris.size());
-                saveUris(progressDialog, targetDir, uris, contents, type);
-            } else {
-                saveContents(targetDir);
-            }
+    private void onTargetDirectorySelected(Uri uri) {
+        if (uri == null) {
+            return; // The user cancelled the directory picker.
         }
-
-        // finish is called by async task
-        //finish();
+        logger.debug("got SAF uri: '{}'", uri);
+        TargetDir targetDir = new TargetDir(this, uri.toString());
+        if (uris != null) {
+            ProgressDialog progressDialog = createProgressDialog(uris.size());
+            saveUris(progressDialog, targetDir, uris, contents, type);
+        } else {
+            saveContents(targetDir);
+        }
     }
 
 

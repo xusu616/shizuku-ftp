@@ -6,12 +6,12 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.Parcelable;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.core.content.IntentCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -22,7 +22,6 @@ import org.primftpd.util.ServicesStartStopUtil;
 import org.primftpd.util.TmpDirType;
 
 import java.io.File;
-import java.util.ArrayList;
 import java.util.List;
 
 public class ReceiveQuickShareActivity extends AbstractReceiveShareActivity {
@@ -80,17 +79,16 @@ public class ReceiveQuickShareActivity extends AbstractReceiveShareActivity {
         this.targetDir = new TargetDir(targetPath);
 
         if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
-            ArrayList<Parcelable> parcelables = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
-            this.uris = new ArrayList<>(parcelables.size());
-            for (Parcelable parcelable : parcelables) {
-                Uri uri = (Uri) parcelable;
-                logger.debug("got uri: '{}'", uri);
-                uris.add(uri);
+            this.uris = IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri.class);
+            if (uris == null || uris.isEmpty()) {
+                logger.warn("received ACTION_SEND_MULTIPLE without stream URIs");
+                finish();
+                return;
             }
             // more in onResume()
         }
         if (Intent.ACTION_SEND.equals(action)) {
-            Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            Uri uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
             logger.debug("got uri: '{}'", uri);
             saveUri(targetDir, uri, content, type);
             onCopyFinished(targetDir);
