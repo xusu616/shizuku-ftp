@@ -48,7 +48,9 @@ public class FilenameUnique {
         if (filename == null || (content == null && addExtension)) {
             // if we still don't have a filename or last part of url does not contain a extension
             // use timestamp as filename
-            filename = FILENAME_DATEFORMAT.format(new Date());
+            synchronized (FILENAME_DATEFORMAT) {
+                filename = FILENAME_DATEFORMAT.format(new Date());
+            }
             addExtension = true;
         }
         String fileExt;

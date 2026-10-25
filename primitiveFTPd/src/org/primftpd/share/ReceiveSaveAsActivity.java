@@ -1,10 +1,10 @@
 package org.primftpd.share;
 
-import android.app.ProgressDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
@@ -18,11 +18,7 @@ import androidx.core.view.WindowInsetsCompat;
 
 import org.primftpd.R;
 import org.primftpd.ui.DownloadOrSaveDialogFragment;
-import org.primftpd.util.FilenameUnique;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -42,13 +38,9 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
             new ActivityResultContracts.OpenDocumentTree(), this::onTargetDirectorySelected);
 
     @Override
-    protected boolean keepWakelock() {
-        return false;
-    }
-
-    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (isFinishing()) return;
         logger.debug("onCreate()");
 
         // EdgeToEdge on Android pre-15
@@ -63,7 +55,7 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
         }
 
         ListView listView = findViewById(R.id.list);
-        ViewCompat.setOnApplyWindowInsetsListener(listView, (v, insetsCompat) -> {
+        ViewCompat.setOnApplyWindowInsetsListener((View) listView.getParent(), (v, insetsCompat) -> {
             final Insets insets = insetsCompat.getInsets(WindowInsetsCompat.Type.systemBars()
                                                          | WindowInsetsCompat.Type.displayCutout());
             v.setPadding(insets.left, insets.top, insets.right, insets.bottom);
@@ -92,6 +84,14 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
         }
 
         logger.debug("got uris: '{}', contents: '{}'", uris, contents);
+
+        if ((uris != null && (uris.isEmpty() || uris.contains(null)))
+                || (uris == null && (contents == null || contents.isEmpty() || contents.contains(null)))) {
+            logger.warn("Received share without valid items");
+            finish();
+            return;
+        }
+        observeCopyProgress();
 
         // check for save to file or use download intent
         List<String> strings = new ArrayList<>();
@@ -133,10 +133,10 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
         }
         if (showDownloadDialog) {
             DownloadOrSaveDialogFragment dialog = new DownloadOrSaveDialogFragment();
-            dialog.show(getSupportFragmentManager(), DIALOG_TAG);
             Bundle diagArgs = new Bundle();
             diagArgs.putString(DownloadOrSaveDialogFragment.KEY_URL, singleString);
             dialog.setArguments(diagArgs);
+            dialog.show(getSupportFragmentManager(), DIALOG_TAG);
         } else {
             prepareSaveToIntent();
         }
@@ -155,41 +155,6 @@ public class ReceiveSaveAsActivity extends AbstractReceiveShareActivity {
         }
         logger.debug("got SAF uri: '{}'", uri);
         TargetDir targetDir = new TargetDir(this, uri.toString());
-        if (uris != null) {
-            ProgressDialog progressDialog = createProgressDialog(uris.size());
-            saveUris(progressDialog, targetDir, uris, contents, type);
-        } else {
-            saveContents(targetDir);
-        }
-    }
-
-
-    protected void saveContents(TargetDir targetDir) {
-        if (contents == null) {
-            finish();
-            return;
-        }
-        for (String content : contents) {
-            if (content == null) {
-                continue;
-            }
-            OutputStream os = null;
-            try {
-                String filename = FilenameUnique.filename(null, null, "txt", targetDir, this);
-                logger.debug("saving with filename: {}", filename);
-                os = targetDir.createOutStream(filename);
-                PrintStream ps = new PrintStream(os);
-                ps.println(content);
-            } catch (Exception e) {
-                logger.warn("could not copy shared data", e);
-            } finally {
-                try {
-                    if (os != null) os.close();
-                } catch (IOException e) {
-                    logger.warn("could not copy shared data", e);
-                }
-            }
-        }
-        finish();
+        saveUris(targetDir, uris, contents, type);
     }
 }

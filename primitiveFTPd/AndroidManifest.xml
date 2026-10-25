@@ -185,7 +185,6 @@
             android:theme="@style/PrimFtpdDeviceTheme"
             android:name="org.primftpd.share.ReceiveSaveAsActivity"
             android:label="@string/saveAs"
-            android:configChanges="orientation"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -243,7 +242,6 @@
             android:theme="@style/PrimFtpdDeviceTheme"
             android:name="org.primftpd.share.ReceiveQuickShareActivity"
             android:label="@string/quickShare"
-            android:configChanges="orientation"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

@@ -24,7 +24,7 @@ public class TargetDir {
     }
 
     public TargetDir(Context context, String targetSafUrl) {
-        this.context = context;
+        this.context = context.getApplicationContext();
         this.targetSafUrl = Uri.parse(targetSafUrl);
     }
 

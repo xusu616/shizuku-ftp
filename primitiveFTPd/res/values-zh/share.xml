@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="share_copy_progress">正在复制文件：%1$d / %2$d</string>
+    <string name="share_copy_failed">有 %1$d 项复制失败，请检查文件访问权限和剩余空间。</string>
+    <string name="share_copy_interrupted">复制已中断，请检查目标目录后重新分享。</string>
+</resources>

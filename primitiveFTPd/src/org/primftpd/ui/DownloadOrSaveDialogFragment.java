@@ -20,17 +20,10 @@ public class DownloadOrSaveDialogFragment extends DialogFragment {
 
     public static final String KEY_URL = "URL";
 
-    private String url;
-
-    @Override
-    public void setArguments(Bundle args) {
-        super.setArguments(args);
-        url = args.getString(KEY_URL);
-    }
-
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
         logger.debug("showing download or save dialog");
+        final String url = requireArguments().getString(KEY_URL);
         final FragmentActivity activity = getActivity();
         AlertDialog.Builder builder = new AlertDialog.Builder(activity);
         builder.setMessage(R.string.downloadOrSaveUrlToFile);
