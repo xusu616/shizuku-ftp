@@ -11,7 +11,6 @@ import org.primftpd.filesystem.Utils;
 import org.primftpd.prefs.StorageType;
 import org.primftpd.util.NotificationUtil;
 import org.primftpd.util.ServicesStartStopUtil;
-import org.primftpd.util.WakelockUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +28,8 @@ public class ServerServiceHandler extends Handler
 
 	private final WeakReference<AbstractServerService> serviceRef;
 	private final String logName;
+	// Each service owns its lock; stopping FTP must not release SFTP's lock.
+	private WakeLock wakeLock;
 
 	private static Shell.Interactive shell;
 	// Guarded by ServerServiceHandler.class, shared by FTP and SFTP handlers.
@@ -140,14 +141,25 @@ public class ServerServiceHandler extends Handler
 	{
 		// acquire wake lock for CPU to still handle requests
 		if (takeWakeLock) {
-			WakelockUtil.obtainWakeLock(powerMgr);
+			if (wakeLock == null) {
+				wakeLock = powerMgr.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+						"pFTPd:server-" + logName);
+				wakeLock.setReferenceCounted(false);
+				wakeLock.acquire(60 * 60 * 1000L);
+			}
 		} else {
 			logger.debug("wake lock disabled ({})", logName);
 		}
 	}
 
 	private synchronized void releaseWakeLock() {
-		WakelockUtil.releaseWakeLock();
+		if (wakeLock != null) {
+			// A timed lock may already have expired before the service stops.
+			if (wakeLock.isHeld()) {
+				wakeLock.release();
+			}
+			wakeLock = null;
+		}
 	}
 
 	private Shell.Interactive shellOpen() {
