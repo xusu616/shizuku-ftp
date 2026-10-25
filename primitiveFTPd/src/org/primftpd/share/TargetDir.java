@@ -3,11 +3,13 @@ package org.primftpd.share;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.net.Uri;
+import android.webkit.MimeTypeMap;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Locale;
 
 import androidx.documentfile.provider.DocumentFile;
 
@@ -45,7 +47,7 @@ public class TargetDir {
         } else if (targetSafUrl != null) {
             return createOutStreamSaf(filename);
         }
-        return null;
+        throw new IllegalStateException("Target directory is not configured");
     }
 
     private boolean doesFilenameExistFs(String filename) {
@@ -69,8 +71,20 @@ public class TargetDir {
 
     private OutputStream createOutStreamSaf(String filename) throws IOException {
         DocumentFile documentFile = DocumentFile.fromTreeUri(context, targetSafUrl);
-        DocumentFile file = documentFile.createFile(null, filename);
+        String extension = filename.substring(filename.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+        String mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+        if (mimeType == null) {
+            mimeType = "application/octet-stream";
+        }
+        DocumentFile file = documentFile.createFile(mimeType, filename);
+        if (file == null) {
+            throw new IOException("Could not create target file: " + filename);
+        }
         ContentResolver contentResolver = context.getContentResolver();
-        return contentResolver.openOutputStream(file.getUri());
+        OutputStream stream = contentResolver.openOutputStream(file.getUri());
+        if (stream == null) {
+            throw new IOException("Provider could not open target file: " + filename);
+        }
+        return stream;
     }
 }
