@@ -25,6 +25,8 @@ internal class UpdatePromptViewModel(application: Application) : AndroidViewMode
     private val prefs = application.getSharedPreferences("startup_experience", Context.MODE_PRIVATE)
     var updateVersion by mutableStateOf<String?>(null)
         private set
+    var releaseUrl by mutableStateOf<String?>(null)
+        private set
     private var checked = false
 
     fun checkOnce() {
@@ -34,25 +36,44 @@ internal class UpdatePromptViewModel(application: Application) : AndroidViewMode
             val latest = withContext(Dispatchers.IO) { fetchLatestVersionFromGithub() }
             if (latest != null && latest != prefs.getString(IGNORED_VERSION, null) &&
                 compareVersions(getVersionName(getApplication()), latest) < 0
-            ) updateVersion = latest
+            ) {
+                updateVersion = latest
+                releaseUrl = latestReleasePageUrl
+            }
         }
     }
 
-    fun dismissUpdate() { updateVersion = null }
+    fun dismissUpdate() {
+        updateVersion = null
+        releaseUrl = null
+    }
 }
 
 @Composable
 internal fun StartupUpdatePrompt(ready: Boolean, state: UpdatePromptViewModel, colorBag: ColorBag) {
     LaunchedEffect(ready) { if (ready) state.checkOnce() }
-    if (ready) state.updateVersion?.let { UpdateAvailableDialog(it, colorBag, state::dismissUpdate) }
+    if (ready) state.updateVersion?.let {
+        UpdateAvailableDialog(
+            version = it,
+            colorBag = colorBag,
+            onDismiss = state::dismissUpdate,
+            releaseUrl = state.releaseUrl
+        )
+    }
 }
 
 @Composable
-internal fun UpdateAvailableDialog(version: String, colorBag: ColorBag, onDismiss: () -> Unit) {
+internal fun UpdateAvailableDialog(
+    version: String,
+    colorBag: ColorBag,
+    onDismiss: () -> Unit,
+    releaseUrl: String? = null
+) {
     val context = LocalContext.current
     val prefs = remember(context) { context.getSharedPreferences("startup_experience", Context.MODE_PRIVATE) }
     // Dismiss only this session. The next startup creates a fresh update-check ViewModel.
     val later = onDismiss
+    val targetUrl = releaseUrl ?: latestReleasePageUrl ?: GITLAB_RELEASES_URL
     WallpaperControlsTheme(colorBag) {
     CompactSettingsDialog(
         onDismissRequest = later,
@@ -62,15 +83,31 @@ internal fun UpdateAvailableDialog(version: String, colorBag: ColorBag, onDismis
             TextButton(onClick = {
                 prefs.edit { putString(IGNORED_VERSION, version) }
                 onDismiss()
-            }) { Text(stringResource(R.string.cancel)) }
+            }) { Text(stringResource(R.string.update_ignore_version)) }
             TextButton(onClick = later) { Text(stringResource(R.string.update_later)) }
         },
         confirmButton = {
             TextButton(onClick = {
                 try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/rD227/shizuku-ftp/releases/latest".toUri()))
+                    val intent = Intent(Intent.ACTION_VIEW, targetUrl.toUri()).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
                     onDismiss()
                 } catch (_: android.content.ActivityNotFoundException) {
+                    Toast.makeText(context, R.string.update_no_browser, Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    if (targetUrl != GITLAB_RELEASES_URL) {
+                        try {
+                            val fallbackIntent = Intent(Intent.ACTION_VIEW, GITLAB_RELEASES_URL.toUri()).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(fallbackIntent)
+                            onDismiss()
+                            return@TextButton
+                        } catch (_: Exception) {}
+                    }
                     Toast.makeText(context, R.string.update_no_browser, Toast.LENGTH_SHORT).show()
                 }
             }) { Text(stringResource(R.string.update_browser)) }

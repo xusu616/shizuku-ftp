@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONArray
 import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,7 +68,12 @@ fun AboutScreen(
     var availableUpdate by remember { mutableStateOf<String?>(null) }
 
     availableUpdate?.let { version ->
-        UpdateAvailableDialog(version = version, colorBag = colorBag, onDismiss = { availableUpdate = null })
+        UpdateAvailableDialog(
+            version = version,
+            colorBag = colorBag,
+            onDismiss = { availableUpdate = null },
+            releaseUrl = latestReleasePageUrl
+        )
     }
 
     val colorBag = colorBag
@@ -271,13 +277,26 @@ internal fun getVersionName(context: Context): String {
     }
 }
 
-private const val LATEST_RELEASE_API =
+internal const val GITHUB_LATEST_RELEASE_API =
     "https://api.github.com/repos/rD227/shizuku-ftp/releases/latest"
+internal const val GITLAB_LATEST_RELEASE_API =
+    "https://gitlab.com/api/v4/projects/xusu616%2Fshizuku-ftp/releases?per_page=1"
 
-/** Fetches the newest GitHub release tag, e.g. "v1.2.1". Returns null when the request fails. */
+internal const val GITHUB_RELEASES_URL =
+    "https://github.com/rD227/shizuku-ftp/releases/latest"
+internal const val GITLAB_RELEASES_URL =
+    "https://gitlab.com/xusu616/shizuku-ftp/-/releases/permalink/latest"
+
+internal var latestReleasePageUrl: String? = null
+
+/**
+ * Fetches the newest release tag (e.g. "v1.2.1").
+ * Queries GitHub first, and when GitHub fails (network error, HTTP != 200, rate limit, exception, or returns null),
+ * falls back to GitLab releases API.
+ */
 internal fun fetchLatestVersionFromGithub(): String? {
-    return try {
-        val connection = URL(LATEST_RELEASE_API).openConnection() as HttpURLConnection
+    val githubVersion = try {
+        val connection = URL(GITHUB_LATEST_RELEASE_API).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "GET"
             connection.setRequestProperty("Accept", "application/vnd.github+json")
@@ -286,7 +305,63 @@ internal fun fetchLatestVersionFromGithub(): String? {
             connection.readTimeout = 10_000
             if (connection.responseCode == HttpURLConnection.HTTP_OK) {
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
-                JSONObject(body).optString("tag_name").takeIf { it.isNotBlank() }
+                val json = JSONObject(body)
+                val tagName = json.optString("tag_name").takeIf { it.isNotBlank() }
+                if (tagName != null) {
+                    val htmlUrl = json.optString("html_url").takeIf { it.isNotBlank() }
+                    latestReleasePageUrl = htmlUrl ?: GITHUB_RELEASES_URL
+                    tagName
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
+        } finally {
+            connection.disconnect()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+
+    if (githubVersion != null) {
+        return githubVersion
+    }
+
+    return fetchLatestVersionFromGitlab()
+}
+
+/**
+ * Fetches the newest release tag from GitLab releases API as fallback.
+ * Response is a JSON array where the latest release is at index 0.
+ * Extracts [0].optString("tag_name").
+ */
+private fun fetchLatestVersionFromGitlab(): String? {
+    return try {
+        val connection = URL(GITLAB_LATEST_RELEASE_API).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("User-Agent", "shizuku-ftp/update-check")
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                val body = connection.inputStream.bufferedReader().use { it.readText() }
+                val releases = JSONArray(body)
+                if (releases.length() > 0) {
+                    val first = releases.optJSONObject(0)
+                    val tagName = first?.optString("tag_name")?.takeIf { it.isNotBlank() }
+                    if (tagName != null) {
+                        val releaseWebUrl = first.optJSONObject("_links")?.optString("self")?.takeIf { it.isNotBlank() }
+                        latestReleasePageUrl = releaseWebUrl ?: GITLAB_RELEASES_URL
+                        tagName
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
             } else {
                 null
             }
