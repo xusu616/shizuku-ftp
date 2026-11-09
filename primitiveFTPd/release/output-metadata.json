@@ -11,8 +11,8 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 77,
-      "versionName": "1.2.9",
+      "versionCode": 79,
+      "versionName": "1.2.11",
       "outputFile": "shizuku-ftp-release.apk"
     }
   ],
